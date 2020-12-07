@@ -98,6 +98,45 @@ TEST(ChmodTest, FchmodatBadF) {
   ASSERT_THAT(fchmodat(-1, "foo", 0444, 0), SyscallFailsWithErrno(EBADF));
 }
 
+TEST(ChmodTest, FchmodFileWithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  auto file = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
+  FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(file.path(), O_PATH));
+
+  ASSERT_THAT(fchmod(fd.get(), 0444), SyscallFailsWithErrno(EBADF));
+}
+
+TEST(ChmodTest, FchmodDirWithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  const auto dir = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateDir());
+  const auto fd =
+      ASSERT_NO_ERRNO_AND_VALUE(Open(dir.path(), O_DIRECTORY | O_PATH));
+
+  ASSERT_THAT(fchmod(fd.get(), 0444), SyscallFailsWithErrno(EBADF));
+}
+
+TEST(ChmodTest, FchmodatWithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  // Drop capabilities that allow us to override file permissions.
+  ASSERT_NO_ERRNO(SetCapability(CAP_DAC_OVERRIDE, false));
+
+  auto temp_file = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
+
+  int parent_fd;
+  ASSERT_THAT(
+      parent_fd = open(GetAbsoluteTestTmpdir().c_str(), O_PATH | O_DIRECTORY),
+      SyscallSucceeds());
+
+  ASSERT_THAT(
+      fchmodat(parent_fd, std::string(Basename(temp_file.path())).c_str(), 0444,
+               0),
+      SyscallSucceeds());
+  EXPECT_THAT(close(parent_fd), SyscallSucceeds());
+
+  EXPECT_THAT(open(temp_file.path().c_str(), O_RDWR),
+              SyscallFailsWithErrno(EACCES));
+}
+
 TEST(ChmodTest, FchmodatNotDir) {
   ASSERT_THAT(fchmodat(-1, "", 0444, 0), SyscallFailsWithErrno(ENOENT));
 }
