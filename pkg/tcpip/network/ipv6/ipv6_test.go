@@ -371,12 +371,10 @@ func TestAddIpv6Address(t *testing.T) {
 				t.Fatalf("AddAddress(_, %d, nil) = %s", ProtocolNumber, err)
 			}
 
-			addr, err := s.GetMainNICAddress(1, header.IPv6ProtocolNumber)
-			if err != nil {
-				t.Fatalf("stack.GetMainNICAddress(_, _) err = %s", err)
-			}
-			if addr.Address != test.addr {
-				t.Fatalf("got stack.GetMainNICAddress(_, _) = %s, want = %s", addr.Address, test.addr)
+			if addr, ok := s.GetMainNICAddress(1, header.IPv6ProtocolNumber); !ok {
+				t.Fatalf("got stack.GetMainNICAddress(1, %d) = (_, false), want = (_, true)", header.IPv6ProtocolNumber)
+			} else if addr.Address != test.addr {
+				t.Fatalf("got stack.GetMainNICAddress(1_, %d) = (%s, true), want = (%s, true)", header.IPv6ProtocolNumber, addr.Address, test.addr)
 			}
 		})
 	}
@@ -2583,7 +2581,7 @@ func (lm *limitedMatcher) Match(stack.Hook, *stack.PacketBuffer, string, string)
 	return false, false
 }
 
-func getKnownNICIDs(proto *protocol) []tcpip.NICID {
+func knownNICIDs(proto *protocol) []tcpip.NICID {
 	var nicIDs []tcpip.NICID
 
 	for k := range proto.mu.eps {
@@ -2600,29 +2598,26 @@ func TestClearEndpointFromProtocolOnClose(t *testing.T) {
 	proto := s.NetworkProtocolInstance(ProtocolNumber).(*protocol)
 	var nic testInterface
 	ep := proto.NewEndpoint(&nic, nil, nil, nil).(*endpoint)
-	{
-		proto.mu.Lock()
-		foundEP, hasEP := proto.mu.eps[nic.ID()]
-		nicIDs := getKnownNICIDs(proto)
-		proto.mu.Unlock()
-		if !hasEP {
-			t.Fatalf("expected to find the nic id %d in the protocol's known nic ids (%v)", nic.ID(), nicIDs)
-		}
-		if foundEP != ep {
-			t.Fatalf("expected protocol to map endpoint %p to nic id %d, but endpoint %p was found instead", ep, nic.ID(), foundEP)
-		}
+	var nicIDs []tcpip.NICID
+	proto.mu.Lock()
+	foundEP, hasEndpointBeforeClose := proto.mu.eps[nic.ID()]
+	nicIDs = knownNICIDs(proto)
+	proto.mu.Unlock()
+	if !hasEndpointBeforeClose {
+		t.Fatalf("expected to find the nic id %d in the protocol's known nic ids (%v)", nic.ID(), nicIDs)
+	}
+	if foundEP != ep {
+		t.Fatalf("found endpoint %p mapped to nid id %d, but expected endpoint %p", foundEP, nic.ID(), ep)
 	}
 
 	ep.Close()
 
-	{
-		proto.mu.Lock()
-		_, hasEP := proto.mu.eps[nic.ID()]
-		nicIDs := getKnownNICIDs(proto)
-		proto.mu.Unlock()
-		if hasEP {
-			t.Fatalf("unexpectedly found an endpoint mapped to the nic id %d in the protocol's known nic ids (%v)", nic.ID(), nicIDs)
-		}
+	proto.mu.Lock()
+	_, hasEndpointAfterClose := proto.mu.eps[nic.ID()]
+	nicIDs = knownNICIDs(proto)
+	proto.mu.Unlock()
+	if hasEndpointAfterClose {
+		t.Fatalf("unexpectedly found an endpoint mapped to the nic id %d in the protocol's known nic ids (%v)", nic.ID(), nicIDs)
 	}
 }
 
