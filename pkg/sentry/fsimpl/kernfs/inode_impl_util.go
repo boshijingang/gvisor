@@ -294,22 +294,29 @@ func (a *InodeAttrs) SetStat(ctx context.Context, fs *vfs.Filesystem, creds *aut
 		return err
 	}
 
+	clearSID := false
 	stat := opts.Stat
+	if stat.Mask&linux.STATX_UID != 0 {
+		atomic.StoreUint32(&a.uid, stat.UID)
+		clearSID = true
+		stat.Mask |= linux.STATX_MODE
+	}
+	if stat.Mask&linux.STATX_GID != 0 {
+		atomic.StoreUint32(&a.gid, stat.GID)
+		clearSID = true
+		stat.Mask |= linux.STATX_MODE
+	}
 	if stat.Mask&linux.STATX_MODE != 0 {
 		for {
 			old := atomic.LoadUint32(&a.mode)
 			new := old | uint32(stat.Mode & ^uint16(linux.S_IFMT))
+			if clearSID {
+				new = vfs.ClearSUIDAndSGID(new)
+			}
 			if swapped := atomic.CompareAndSwapUint32(&a.mode, old, new); swapped {
 				break
 			}
 		}
-	}
-
-	if stat.Mask&linux.STATX_UID != 0 {
-		atomic.StoreUint32(&a.uid, stat.UID)
-	}
-	if stat.Mask&linux.STATX_GID != 0 {
-		atomic.StoreUint32(&a.gid, stat.GID)
 	}
 
 	now := ktime.NowFromContext(ctx).Nanoseconds()
