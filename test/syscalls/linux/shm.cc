@@ -256,32 +256,26 @@ TEST(ShmTest, IpcInfo) {
 }
 
 TEST(ShmTest, ShmInfo) {
-  struct shm_info info;
-
-  // We generally can't know what other processes on a linux machine
-  // does with shared memory segments, so we can't test specific
-  // numbers on Linux. When running under gvisor, we're guaranteed to
-  // be the only ones using shm, so we can easily verify machine-wide
-  // numbers.
-  if (IsRunningOnGvisor()) {
-    ASSERT_NO_ERRNO(Shmctl(0, SHM_INFO, &info));
-    EXPECT_EQ(info.used_ids, 0);
-    EXPECT_EQ(info.shm_tot, 0);
-    EXPECT_EQ(info.shm_rss, 0);
-    EXPECT_EQ(info.shm_swp, 0);
-  }
+  // Take a snapshot of the system before the test runs.
+  struct shm_info snap;
+  ASSERT_NO_ERRNO(Shmctl(0, SHM_INFO, &snap));
 
   const ShmSegment shm = ASSERT_NO_ERRNO_AND_VALUE(
       Shmget(IPC_PRIVATE, kAllocSize, IPC_CREAT | 0777));
   const char* addr = ASSERT_NO_ERRNO_AND_VALUE(Shmat(shm.id(), nullptr, 0));
 
+  struct shm_info info;
   ASSERT_NO_ERRNO(Shmctl(1, SHM_INFO, &info));
 
+  // We generally can't know what other processes on a linux machine do with
+  // shared memory segments, so we can't test specific numbers on Linux. When
+  // running under gvisor, we're guaranteed to be the only ones using shm, so
+  // we can easily verify machine-wide numbers.
   if (IsRunningOnGvisor()) {
     ASSERT_NO_ERRNO(Shmctl(shm.id(), SHM_INFO, &info));
-    EXPECT_EQ(info.used_ids, 1);
-    EXPECT_EQ(info.shm_tot, kAllocSize / kPageSize);
-    EXPECT_EQ(info.shm_rss, kAllocSize / kPageSize);
+    EXPECT_EQ(info.used_ids, snap.used_ids + 1);
+    EXPECT_EQ(info.shm_tot, snap.shm_tot + (kAllocSize / kPageSize));
+    EXPECT_EQ(info.shm_rss, snap.shm_rss + (kAllocSize / kPageSize));
     EXPECT_EQ(info.shm_swp, 0);  // Gvisor currently never swaps.
   }
 
@@ -378,18 +372,18 @@ TEST(ShmDeathTest, SegmentNotAccessibleAfterDetach) {
   SetupGvisorDeathTest();
 
   const auto rest = [&] {
-    ShmSegment shm = ASSERT_NO_ERRNO_AND_VALUE(
+    ShmSegment shm = TEST_CHECK_NO_ERRNO_AND_VALUE(
         Shmget(IPC_PRIVATE, kAllocSize, IPC_CREAT | 0777));
-    char* addr = ASSERT_NO_ERRNO_AND_VALUE(Shmat(shm.id(), nullptr, 0));
+    char* addr = TEST_CHECK_NO_ERRNO_AND_VALUE(Shmat(shm.id(), nullptr, 0));
 
     // Mark the segment as destroyed so it's automatically cleaned up when we
     // crash below. We can't rely on the standard cleanup since the destructor
     // will not run after the SIGSEGV. Note that this doesn't destroy the
     // segment immediately since we're still attached to it.
-    ASSERT_NO_ERRNO(shm.Rmid());
+    TEST_CHECK_NO_ERRNO(shm.Rmid());
 
     addr[0] = 'x';
-    ASSERT_NO_ERRNO(Shmdt(addr));
+    TEST_CHECK_NO_ERRNO(Shmdt(addr));
 
     // This access should cause a SIGSEGV.
     addr[0] = 'x';
